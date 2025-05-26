@@ -73,12 +73,12 @@ class Server(threading.Thread):
                     break
         except Exception as e:
             logging.critical(f"Server run failed to start or bind/listen: {e}", exc_info=True)
-            self.running = False # Ensure it's set to false if startup failed
+            self.running = False 
         finally:
             logging.warning("Server_run loop selesai. Memulai shutdown...")
             
             logging.warning("Mematikan thread pool executor...")
-            self.executor.shutdown(wait=True) # Wait for all current tasks to complete
+            self.executor.shutdown(wait=True) 
             logging.warning("Thread pool executor dimatikan.")
             
             if self.my_socket:

@@ -11,15 +11,15 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 # --- Configuration ---
 SERVER_HOST = '172.16.16.101'
 SERVER_PORT = 6667
-NUM_CLIENT_WORKERS = 1
-BASE_DUMMY_FILENAME = "donalbebek" # test
+NUM_CLIENT_WORKERS = 50
+# BASE_DUMMY_FILENAME = "donalbebek" # test
 # BASE_DUMMY_FILENAME = "Deep_Learning_Notes_-_COSE474(03)" # 5mb
 # BASE_DUMMY_FILENAME = "IFDPInfrastructure" # 10mb
-# BASE_DUMMY_FILENAME = "preprocessed_df_assignment" # 20mb
-EXTENSION = ".jpg" # csv or pdf
+BASE_DUMMY_FILENAME = "preprocessed_df_assignment" # 20mb
+EXTENSION = ".csv" # csv or pdf
 DOWNLOAD_DIR = "downloads/"
 LOG_LEVEL = logging.INFO
-ACTION = "GET" # POST or GET
+ACTION = "POST" # POST or GET
 
 stats = {
     "connections_attempted": 0,
@@ -96,14 +96,15 @@ def send_command_to_server(command_str, server_address):
         return False, f"JSON Decode Error: {e}"
     except Exception as e:
         logging.debug(f"Generic error in send_command: {e}")
-        if not connection_success: # If connect() didn't happen or failed before this.
+        if not connection_success:
              with stats_lock:
-                stats["connections_failed"] += 1 # Count as connection fail if very early
+                stats["connections_failed"] += 1
         return False, str(e)
     finally:
         sock.close()
 
 def perform_operation(worker_id, action, server_address):   
+    logging.info(f"Worker {worker_id}: Starting {ACTION} to {server_address}")
     filename_for_ops = f"{BASE_DUMMY_FILENAME}_w{worker_id}_{int(time.time_ns())}{EXTENSION}"
     basefile = f"{BASE_DUMMY_FILENAME}{EXTENSION}"
 
@@ -120,7 +121,7 @@ def perform_operation(worker_id, action, server_address):
         encoded_content = base64.b64encode(fp.read()).decode()
         fp.close()        
         command_str = f"POST {current_post_filename} {encoded_content}"
-        op_type = f"post_{current_post_filename}" # More specific log
+        op_type = f"post_{current_post_filename}"
     elif action == "GET":
         command_str = f"GET {basefile}"
 
@@ -143,7 +144,8 @@ def perform_operation(worker_id, action, server_address):
                     except Exception as e_dl:
                         logging.warning(f"Worker {worker_id}: Failed to save downloaded file: {e_dl}")
 
-        logging.debug(f"Worker {worker_id} ({op_type}): SUCCESS")
+        logging.debug(f"Worker {worker_id} : Finished, ({op_type}): SUCCESS")
+
     else:
         with stats_lock:
             stats["ops_failed"] += 1
@@ -152,17 +154,6 @@ def perform_operation(worker_id, action, server_address):
         logging.info(error_detail) 
     
     return op_success
-
-def client_worker_task(worker_id, server_address):
-    """Task for a single client worker thread."""
-    logging.info(f"Worker {worker_id}: Starting {ACTION} to {server_address}")
-    success = perform_operation(worker_id, ACTION, server_address)
-
-    if not success:
-        logging.warning(f"Worker {worker_id}: Finished, {ACTION} operation FAILED.")
-    else:
-        logging.info(f"Worker {worker_id}: Finished, {ACTION} operation SUCCEEDED.")
-    return success
 
 def main_stress_test():
     logging.basicConfig(level=LOG_LEVEL, format='%(asctime)s - %(levelname)s - %(threadName)s - %(message)s')
@@ -173,15 +164,12 @@ def main_stress_test():
         os.makedirs(DOWNLOAD_DIR)
         logging.info(f"Created download directory: {DOWNLOAD_DIR}")
 
-    logging.info(f"Starting stress test: {NUM_CLIENT_WORKERS} workers "
-                 f"against server {server_address}")
-    
+    logging.info(f"Starting stress test: {NUM_CLIENT_WORKERS} workers against server {server_address}")
     start_time = time.time()
-    
     total_successes = 0
-    
+
     with ThreadPoolExecutor(max_workers=NUM_CLIENT_WORKERS) as executor:
-        futures = [executor.submit(client_worker_task, i, server_address) 
+        futures = [executor.submit(perform_operation, i, ACTION, server_address) 
                    for i in range(NUM_CLIENT_WORKERS)]
         
         for future in as_completed(futures):
@@ -192,7 +180,6 @@ def main_stress_test():
 
     end_time = time.time()
     duration = end_time - start_time
-    
     throughput = stats['bits_processed'] / duration if duration > 0 else float('inf')
 
     logging.info("--- Stress Test Summary ---")
