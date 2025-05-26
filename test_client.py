@@ -9,12 +9,17 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # --- Configuration ---
-SERVER_HOST = '0.0.0.0' 
+SERVER_HOST = '172.16.16.101'
 SERVER_PORT = 6667
-NUM_CLIENT_WORKERS = 10
-BASE_DUMMY_FILENAME = "IFDPInfrastructure"
+NUM_CLIENT_WORKERS = 1
+BASE_DUMMY_FILENAME = "donalbebek" # test
+# BASE_DUMMY_FILENAME = "Deep_Learning_Notes_-_COSE474(03)" # 5mb
+# BASE_DUMMY_FILENAME = "IFDPInfrastructure" # 10mb
+# BASE_DUMMY_FILENAME = "preprocessed_df_assignment" # 20mb
+EXTENSION = ".jpg" # csv or pdf
 DOWNLOAD_DIR = "downloads/"
 LOG_LEVEL = logging.INFO
+ACTION = "GET" # POST or GET
 
 stats = {
     "connections_attempted": 0,
@@ -25,13 +30,14 @@ stats = {
     "ops_failed": 0,
     "post_ok": 0,
     "get_ok": 0,
+    "bits_processed": 0,
     "errors": []
 }
 stats_lock = threading.Lock()
 
 def send_command_to_server(command_str, server_address):
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.settimeout(20) 
+    sock.settimeout(None) 
     connection_success = False
     try:
         with stats_lock:
@@ -41,6 +47,7 @@ def send_command_to_server(command_str, server_address):
         with stats_lock:
             stats["connections_successful"] += 1
         
+        command_str += "\r\n\r\n"
         sock.sendall(command_str.encode())
         
         data_received_parts = []
@@ -49,9 +56,10 @@ def send_command_to_server(command_str, server_address):
             try:
                 part = sock.recv(4096)
                 if not part: break
-                data_received_parts.append(part.decode('utf-8', errors='ignore'))
+                data_received_parts.append(part)
                 current_response_size += len(part)
-                if "\r\n\r\n" in "".join(data_received_parts): break
+                logging.debug(f"Processing chunks size: {current_response_size}")
+                if b"\r\n\r\n" in b"".join(data_received_parts): break
                 
             except socket.timeout:
                 logging.debug("Timeout waiting for server data part.")
@@ -61,7 +69,13 @@ def send_command_to_server(command_str, server_address):
         if not data_received_parts:
             return False, "No data from server"
 
-        data_received_str = "".join(data_received_parts)
+        if ACTION == "GET":
+            stats['bits_processed'] = current_response_size
+        elif ACTION == "POST":
+            stats['bits_processed'] = len(command_str)     
+
+        data_received = b"".join(data_received_parts)
+        data_received_str = data_received.decode('utf-8', errors='ignore')
         clean_data_str = data_received_str.split("\r\n\r\n", 1)[0]
         
         hasil = json.loads(clean_data_str)
@@ -89,11 +103,9 @@ def send_command_to_server(command_str, server_address):
     finally:
         sock.close()
 
-def perform_operation(worker_id, action, server_address):
-    """A single client worker performing one operation."""
-   
-    filename_for_ops = f"{BASE_DUMMY_FILENAME}_w{worker_id}_{int(time.time_ns())}.pdf"
-    basefile = f"files/{BASE_DUMMY_FILENAME}.pdf"
+def perform_operation(worker_id, action, server_address):   
+    filename_for_ops = f"{BASE_DUMMY_FILENAME}_w{worker_id}_{int(time.time_ns())}{EXTENSION}"
+    basefile = f"{BASE_DUMMY_FILENAME}{EXTENSION}"
 
     op_success = False
     command_str = ""
@@ -104,13 +116,13 @@ def perform_operation(worker_id, action, server_address):
 
     if action == "POST":
         current_post_filename = filename_for_ops
-        fp = open(basefile, 'rb')
+        fp = open(f"files/{basefile}", 'rb')
         encoded_content = base64.b64encode(fp.read()).decode()
         fp.close()        
         command_str = f"POST {current_post_filename} {encoded_content}"
         op_type = f"post_{current_post_filename}" # More specific log
     elif action == "GET":
-        command_str = f"GET {filename_for_ops}" # Try to get the file posted in op 0
+        command_str = f"GET {basefile}"
 
     logging.debug(f"Worker {worker_id}: Action {action}, Cmd: {command_str[:70]}...")
     status, response = send_command_to_server(command_str, server_address)
@@ -143,13 +155,13 @@ def perform_operation(worker_id, action, server_address):
 
 def client_worker_task(worker_id, server_address):
     """Task for a single client worker thread."""
-    logging.info(f"Worker {worker_id}: Starting to {server_address}")
-    success = perform_operation(worker_id, "POST", server_address)
+    logging.info(f"Worker {worker_id}: Starting {ACTION} to {server_address}")
+    success = perform_operation(worker_id, ACTION, server_address)
 
     if not success:
-        logging.warning(f"Worker {worker_id}: Finished, a single operation FAILED.")
+        logging.warning(f"Worker {worker_id}: Finished, {ACTION} operation FAILED.")
     else:
-        logging.info(f"Worker {worker_id}: Finished, a single operation SUCCEEDED.")
+        logging.info(f"Worker {worker_id}: Finished, {ACTION} operation SUCCEEDED.")
     return success
 
 def main_stress_test():
@@ -161,7 +173,7 @@ def main_stress_test():
         os.makedirs(DOWNLOAD_DIR)
         logging.info(f"Created download directory: {DOWNLOAD_DIR}")
 
-    logging.info(f"Starting stress test: {NUM_CLIENT_WORKERS} workers"
+    logging.info(f"Starting stress test: {NUM_CLIENT_WORKERS} workers "
                  f"against server {server_address}")
     
     start_time = time.time()
@@ -181,19 +193,16 @@ def main_stress_test():
     end_time = time.time()
     duration = end_time - start_time
     
-    throughput = stats['ops_successful'] / duration if duration > 0 else float('inf')
+    throughput = stats['bits_processed'] / duration if duration > 0 else float('inf')
 
     logging.info("--- Stress Test Summary ---")
     logging.info(f"Total duration: {duration:.2f} seconds")
     logging.info(f"Connections: {stats['connections_successful']} successful / {stats['connections_attempted']} attempted / {stats['connections_failed']} failed")
     logging.info(f"Operations: {stats['ops_successful']} successful / {stats['ops_attempted']} attempted / {stats['ops_failed']} failed")
-    logging.info(f"Throughput (Successful Ops/sec): {throughput:.2f}")
+    logging.info(f"Bits processed: {stats['bits_processed']:.2f}")
+    logging.info(f"Throughput (b/s): {throughput:.2f}")
     logging.info(f"  POST OK: {stats['post_ok']}")
     logging.info(f"  GET OK: {stats['get_ok']}")
-    
-    if stats['ops_attempted'] > 0:
-        ops_per_second = stats['ops_successful'] / duration if duration > 0 else float('inf')
-        logging.info(f"Successful Ops/sec: {ops_per_second:.2f}")
 
     if stats["errors"]:
         logging.warning(f"\n--- Top {min(10, len(stats['errors']))} Errors ---")
