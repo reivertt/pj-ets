@@ -2,11 +2,14 @@ import os
 import json
 import base64
 from glob import glob
-
+import logging
 
 class FileInterface:
     def __init__(self):
-        os.chdir('files/')
+        self.target_dir = 'files/'
+        if not os.path.exists(self.target_dir):
+            os.makedirs(self.target_dir)
+        os.chdir(self.target_dir)
 
     def list(self,params=[]):
         try:
